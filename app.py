@@ -6,6 +6,7 @@ import pandas as pd
 from datetime import datetime
 import altair as alt
 
+
 # --- CONFIGURAZIONE PAGINA ---
 st.set_page_config(
     page_title="Smart Underpass | Dashboard",
