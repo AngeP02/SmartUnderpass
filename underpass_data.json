@@ -1,0 +1,24 @@
+{
+  "timestamp": "2025-12-26T18:14:33.468399",
+  "luminosita_lux": 5,
+  "duty_cycle_luci": 10,
+  "temperatura_celsius": 22,
+  "pressione_hpa": 1006,
+  "umidita_percentuale": 64,
+  "livello_acqua_cm": 3,
+  "semafori": {
+    "moto": {
+      "giallo": false,
+      "rosso": true
+    },
+    "auto": {
+      "giallo": false,
+      "rosso": true
+    },
+    "camion": {
+      "giallo": true,
+      "rosso": false
+    }
+  },
+  "cambio_drastico": false
+}

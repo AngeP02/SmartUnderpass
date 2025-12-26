@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 """
 Script per leggere i messaggi dal TelosB via seriale e pubblicarli su MQTT.
-VERSIONE CORRETTA PER INSTANT CONTIKI / TINYOS
+AGGIORNATO PER VISUALIZZARE LOGICA ISTERESI ACQUA
 """
 
 from __future__ import print_function
@@ -25,33 +25,28 @@ except ImportError:
 # CONFIGURAZIONE
 # =============================================================================
 
-SERIAL_PORT = "COM7"
+SERIAL_PORT = "COM7"  # <--- VERIFICA CHE SIA CORRETTA
 BAUD_RATE = 115200
 TIMEOUT = 2
 
-MQTT_BROKER = "localhost"
+MQTT_BROKER = "broker.hivemq.com"
 MQTT_PORT = 1883
-MQTT_TOPIC_DATA = "underpass/sensor/data"
-MQTT_TOPIC_STATUS = "underpass/sensor/status"
-MQTT_CLIENT_ID = "telosb_serial_reader"
+MQTT_TOPIC_DATA = "angelica/iot/data"
+MQTT_CLIENT_ID = "sender_angelica_pc"
 
 JSON_FILE = "underpass_data.json"
 
 # =============================================================================
-# STRUTTURA DATI CORRETTA
+# STRUTTURA DATI (AMSend)
 # =============================================================================
-# Correzione 1: La dimensione è 22 byte, non 23.
+# Deve corrispondere alla struct ReportMsg nel file .h
 REPORT_MSG_SIZE = 22
-
-# Correzione 2: TinyOS usa Big-Endian per i tipi nx_ (network types).
-# Usiamo '!' invece di '<' per indicare Big-Endian.
-# H=uint16, h=int16, B=uint8
-REPORT_MSG_FORMAT = '!HHBhHHHBBBBBBBH'
+REPORT_MSG_FORMAT = '!HHBhHHHBBBBBBBH'  # Big-Endian
 MAGIC_HEADER = 0xAA55
 
 
 # =============================================================================
-# CLASSE MQTT (Semplificata)
+# CLASSE MQTT
 # =============================================================================
 
 class MQTTPublisher:
@@ -100,7 +95,6 @@ def decode_report_msg(data):
             return None
 
         # Calcolo Checksum
-        # Somma i valori numerici dei byte (Python 2/3 compatibile)
         checksum_calc = 0
         payload_bytes = data[:REPORT_MSG_SIZE - 2]
         for b in payload_bytes:
@@ -108,7 +102,7 @@ def decode_report_msg(data):
             checksum_calc += val
 
         checksum_calc &= 0xFFFF
-        checksum_recv = values[14]  # L'ultimo elemento è il checksum
+        checksum_recv = values[14]
 
         if checksum_calc != checksum_recv:
             print("Checksum Errato: Calc " + str(checksum_calc) + " vs Recv " + str(checksum_recv))
@@ -144,91 +138,88 @@ def save_to_json(data, filename):
         pass
 
 
-def get_stato_sistema(report):
-    livello = report['livello_acqua_cm']
-    if livello >= 6:
-        return "CHIUSURA_TOTALE"
-    elif livello >= 5:
-        return "CRITICITA_ELEVATA"
-    elif livello >= 3:
-        return "STOP_AUTO_MOTO"
-    elif livello >= 2:
-        return "CRITICITA_MODERATA"
-    elif livello >= 1:
-        return "ATTENZIONE"
-    else:
-        return "AGIBILE"
-
-
 # =============================================================================
 # MAIN
 # =============================================================================
 
 def main():
-    print("SMART UNDERPASS BRIDGE (Fix per Instant Contiki)")
+    print("SMART UNDERPASS BRIDGE (Lettura dati + Debug Isteresi)")
+    print("-------------------------------------------------------")
 
     mqtt_pub = None
     if MQTT_AVAILABLE:
-        print("MQTT: Abilitato")
+        print("MQTT: Abilitato -> " + MQTT_BROKER)
         mqtt_pub = MQTTPublisher(MQTT_BROKER, MQTT_PORT, MQTT_CLIENT_ID)
         if not mqtt_pub.connect():
             print("MQTT: Connessione fallita")
     else:
-        print("MQTT: Non disponibile (salvataggio locale)")
+        print("MQTT: Non disponibile")
 
     try:
         ser = serial.Serial(SERIAL_PORT, BAUD_RATE, timeout=TIMEOUT)
         print("Seriale aperta su " + SERIAL_PORT)
     except Exception as e:
-        print("ERRORE Seriale: " + str(e))
+        print("ERRORE APERTURA SERIALE: " + str(e))
         sys.exit(1)
 
     buffer = bytearray()
 
     try:
         while True:
-            # CORREZIONE COMPATIBILITA' PYSERIAL OLD/NEW
+            # Compatibilità PySerial 2/3
             n_waiting = 0
             if hasattr(ser, 'in_waiting'):
                 n_waiting = ser.in_waiting
             else:
-                n_waiting = ser.inWaiting()  # Metodo vecchio per PySerial 2.x
+                n_waiting = ser.inWaiting()
 
             if n_waiting > 0:
                 new_data = ser.read(n_waiting)
                 buffer.extend(new_data)
 
+                # --- 1. CERCA E DECODIFICA PACCHETTI BINARI (AMSend) ---
                 while len(buffer) >= REPORT_MSG_SIZE:
-                    # Cerca Magic Header (0xAA55 in Big Endian è \xAA\x55)
-                    # Nota: struct.pack('!H', 0xAA55) produce b'\xaa\x55'
                     header_bytes = b'\xaa\x55'
 
-                    # Hack per compatibilità python 2 bytearray find
+                    # Cerca l'header
                     str_buffer = bytes(buffer)
                     idx = str_buffer.find(header_bytes)
 
+                    # Se non lo trova ma il buffer è pieno di testo, pulisci
                     if idx == -1:
-                        if len(buffer) > 2: buffer = buffer[-2:]
+                        # Non cancellare tutto subito, potremmo avere printf
                         break
 
+                    # Se l'header non è all'inizio, controlla se c'è testo prima
                     if idx > 0:
-                        buffer = buffer[idx:]
+                        # C'è roba prima dell'header? Potrebbe essere testo printf
+                        text_part = buffer[:idx]
+                        if b'\n' in text_part:
+                            # Lascia che il gestore testo sotto lo stampi
+                            break
+                        else:
+                            # Spazzatura, scarta fino all'header
+                            buffer = buffer[idx:]
 
+                    # Ora buffer inizia con AA 55
                     if len(buffer) < REPORT_MSG_SIZE:
                         break
 
                     raw_data = bytes(buffer[:REPORT_MSG_SIZE])
-                    buffer = buffer[REPORT_MSG_SIZE:]
 
+                    # Decodifica
                     report = decode_report_msg(raw_data)
 
                     if report:
-                        print("\n[RICEVUTO] " + report['timestamp'])
-                        print("Temp: %d C | Press: %d hPa | Umid: %d %%" % (
+                        # Rimuovi il pacchetto processato dal buffer
+                        buffer = buffer[REPORT_MSG_SIZE:]
+
+                        print("\n[RICEVUTO PACKET] " + report['timestamp'])
+                        print(" > Meteo: %d C | %d hPa | %d %%" % (
                             report['temperatura_celsius'],
                             report['pressione_hpa'],
                             report['umidita_percentuale']))
-                        print("Acqua: %d cm | Luci: %d lux" % (
+                        print(" > Acqua: %d cm | Luci: %d lux" % (
                             report['livello_acqua_cm'],
                             report['luminosita_lux']))
 
@@ -237,18 +228,36 @@ def main():
 
                         if MQTT_AVAILABLE and mqtt_pub and mqtt_pub.connected:
                             mqtt_pub.publish(MQTT_TOPIC_DATA, json_data)
-                            print(">> Inviato MQTT")
+                            print(" > MQTT Inviato")
+                    else:
+                        # Header trovato ma pacchetto invalido (es. checksum), avanza di 1 byte
+                        buffer = buffer[1:]
 
-                # Gestione debug printf (testo semplice)
+                # --- 2. GESTIONE MESSAGGI DEBUG (Printf) ---
                 while b'\n' in buffer:
+                    # Se l'header binario è all'inizio, non toccare, è compito del while sopra
+                    if len(buffer) >= 2 and buffer[0] == 0xAA and buffer[1] == 0x55:
+                        break
+
                     idx = buffer.find(b'\n')
-                    if idx != -1 and idx < 80:  # Se è una linea corta probabilmente è testo
-                        line = buffer[:idx].decode('utf-8', 'ignore').strip()
-                        buffer = buffer[idx + 1:]
-                        # Filtra caratteri strani
-                        # Cerca questo blocco nel while b'\n' in buffer:
-                        if len(line) > 2 and "RICEVUTO" not in line:
-                            print("[DEBUG MOTE] " + line)  # Assicurati che stampi tutto
+                    if idx != -1:
+                        # Estrai la linea
+                        line_bytes = buffer[:idx]
+                        buffer = buffer[idx + 1:]  # Rimuovi dal buffer
+
+                        # Filtro lunghezza (aumentato a 150 per i messaggi lunghi)
+                        if len(line_bytes) > 0 and len(line_bytes) < 150:
+                            try:
+                                line = line_bytes.decode('utf-8', 'ignore').strip()
+                                # Stampa solo se è testo leggibile
+                                if len(line) > 1:
+                                    if ">>>" in line:
+                                        # Evidenzia i messaggi di controllo logica
+                                        print("\033[93m[LOGIC] " + line + "\033[0m")
+                                    elif "RICEVUTO" not in line:
+                                        print("[MOTE] " + line)
+                            except:
+                                pass
                     else:
                         break
 
