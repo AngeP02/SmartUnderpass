@@ -1,3 +1,4 @@
+import uuid
 import streamlit as st
 import paho.mqtt.client as mqtt
 import json
@@ -10,12 +11,14 @@ from datetime import datetime
 INDIRIZZO_SERVER_MQTT = "broker.hivemq.com"
 PORTA = 1883
 CANALE_MQTT = "angelica/iot/data"
-CLIENT_ID = "dashboard_angelica_final"
+CLIENT_ID = f"dashboard_angelica_{uuid.uuid4()}"
+
 st.set_page_config(
     page_title="Smart Underpass | Real-Time",
     layout="wide",
     initial_sidebar_state="expanded"
 )
+
 st.markdown("""
 <style>
     .stApp {
@@ -77,7 +80,7 @@ data_store = st.session_state.data_store
 
 def on_connect(client, userdata, flags, connesso):
     if connesso == 0:
-        client.subscribe(CANALE_MQTT)
+        client.subscribe(CANALE_MQTT, qos=1)
     else:
         st.error(f"Connessione fallita codice errore: {connesso}")
 
@@ -93,10 +96,11 @@ def on_message(client, userdata, message):
     except Exception as e:
         print(f"Errore nella lettura del messaggio: {e}")
 
+if 'mqtt_client_id' not in st.session_state:
+    st.session_state.mqtt_client_id = f"dashboard_angelica_{uuid.uuid4()}"
 
-@st.cache_resource
 def start_mqtt():
-    client = mqtt.Client(CLIENT_ID)
+    client = mqtt.Client(st.session_state.mqtt_client_id)
     client.on_connect = on_connect
     client.on_message = on_message
     try:
@@ -106,8 +110,9 @@ def start_mqtt():
     except Exception as e:
         return None
 
-
-client = start_mqtt()
+if 'mqtt_client' not in st.session_state:
+    st.session_state.mqtt_client = start_mqtt()
+client = st.session_state.mqtt_client
 
 def livello_allerta(livello_acqua):
     if livello_acqua >= 4.0:
@@ -276,7 +281,7 @@ else:
         etichetta = "NOTTE 🌑"
         colore = "#6b7280"
     elif luminosita_lux < 1000:
-        etichetta = "NUUVOLOSO / CREPUSCOLO ☁️"
+        etichetta = "NUUVOLOSO ☁️"
         colore = "#9ca3af"
     elif luminosita_lux < 3000:
         etichetta = "LUCE GIORNO ⛅"
@@ -331,7 +336,7 @@ else:
 
     timestamp = datetime.now().strftime('%H:%M:%S')
     st.session_state.storico_letture.append({
-        'Tempo': timestamp,
+        'Time': timestamp,
         'Livello': livello_acqua,
         'Temperatura': temperatura,
         'Umidità': umidita,

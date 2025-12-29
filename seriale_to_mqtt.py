@@ -47,7 +47,7 @@ class MQTTmittente:
     def pubblica(self, topic, payload):
         if self.connesso:
             try:
-                self.client.publish(topic, payload)
+                self.client.publish(topic, payload, retain=True, qos=1)
                 return True
             except:
                 return False
